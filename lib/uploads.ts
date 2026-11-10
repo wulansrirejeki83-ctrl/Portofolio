@@ -1,9 +1,6 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
-import path from "node:path";
-
 import {
   MAX_FILES_PER_WORK,
   MAX_UPLOAD_BYTES,
@@ -13,15 +10,11 @@ import {
   uploadExtension,
   type UploadExtension,
 } from "@/lib/upload-rules";
+import { createServiceClient } from "@/lib/supabase/admin";
+import { createClient as createServerSupabase } from "@/lib/supabase/server";
 import type { WorkFile } from "@/lib/types";
 
-/**
- * Penyimpanan berkas karya di `.data/uploads`.
- * Hanya untuk pengembangan lokal, sama seperti `.data/store.json`.
- */
-export const UPLOAD_DIR = path.join(process.cwd(), ".data", "uploads");
-
-const SAFE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const BUCKET_NAME = "berkas-karya";
 
 export class UploadError extends Error {}
 
@@ -65,19 +58,17 @@ function hasValidSignature(extension: UploadExtension, bytes: Uint8Array): boole
   }
 }
 
-function storedFileName(file: WorkFile): string {
-  const id = SAFE_ID.test(file.id) ? file.id : "invalid";
-  const extension = normalizeExtension(file.extension) ?? "bin";
-  return `${id}.${extension}`;
-}
-
-function storedPath(file: WorkFile): string {
-  return path.join(UPLOAD_DIR, storedFileName(file));
+async function getStorageClient() {
+  try {
+    return createServiceClient();
+  } catch {
+    return await createServerSupabase();
+  }
 }
 
 /**
- * Validasi lalu simpan berkas baru. Mengembalikan metadata yang siap
- * dimasukkan ke data karya.
+ * Validasi lalu simpan berkas baru ke Supabase Storage.
+ * Mengembalikan metadata WorkFile yang siap disimpan ke database.
  */
 export async function saveUploads(
   files: File[],
@@ -129,27 +120,63 @@ export async function saveUploads(
     });
   }
 
+  const supabase = await getStorageClient();
+  const uploadedFiles: WorkFile[] = [];
+
   try {
-    await fs.mkdir(UPLOAD_DIR, { recursive: true });
     for (const item of prepared) {
-      await fs.writeFile(path.join(UPLOAD_DIR, storedFileName(item.meta)), item.buffer);
+      const storagePath = `${item.meta.id}.${item.meta.extension}`;
+      const { error } = await supabase.storage
+        .from(BUCKET_NAME)
+        .upload(storagePath, item.buffer, {
+          contentType: item.meta.mime,
+          upsert: true,
+        });
+
+      if (error) {
+        throw new UploadError(`Gagal mengunggah berkas: ${error.message}`);
+      }
+
+      uploadedFiles.push(item.meta);
     }
   } catch (error) {
-    await deleteUploads(prepared.map((item) => item.meta));
+    await deleteUploads(uploadedFiles);
     throw error;
   }
 
-  return prepared.map((item) => item.meta);
+  return uploadedFiles;
 }
 
+/**
+ * Hapus berkas dari Supabase Storage.
+ */
 export async function deleteUploads(files: WorkFile[]): Promise<void> {
   if (files.length === 0) return;
 
-  await Promise.allSettled(
-    files.map((file) => fs.rm(storedPath(file), { force: true })),
-  );
+  const supabase = await getStorageClient();
+  const paths = files.map((f) => {
+    const ext = normalizeExtension(f.extension) ?? "bin";
+    return `${f.id}.${ext}`;
+  });
+
+  await supabase.storage.from(BUCKET_NAME).remove(paths);
 }
 
+/**
+ * Baca isi buffer berkas dari Supabase Storage.
+ */
 export async function readUpload(file: WorkFile): Promise<Buffer> {
-  return fs.readFile(storedPath(file));
+  const supabase = await getStorageClient();
+  const ext = normalizeExtension(file.extension) ?? "bin";
+  const storagePath = `${file.id}.${ext}`;
+
+  const { data, error } = await supabase.storage
+    .from(BUCKET_NAME)
+    .download(storagePath);
+
+  if (error || !data) {
+    throw new UploadError(`Berkas tidak dapat diunduh: ${error?.message}`);
+  }
+
+  return Buffer.from(await data.arrayBuffer());
 }

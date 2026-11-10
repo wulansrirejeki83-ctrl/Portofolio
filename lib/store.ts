@@ -1,18 +1,15 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
-import path from "node:path";
-
-import { authorProfile, categories, works } from "@/lib/data";
 import { readingMinutes } from "@/lib/format";
 import { uniqueSlug } from "@/lib/slug";
+import { createClient as createServerSupabase } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/admin";
 import { deleteUploads } from "@/lib/uploads";
 import type {
   AuthorProfile,
   Category,
   CategoryInput,
-  StoreData,
   Work,
   WorkFile,
   WorkInput,
@@ -20,175 +17,23 @@ import type {
   WorkSummary,
 } from "@/lib/types";
 
-/**
- * Penyimpanan lokal sementara.
- *
- * Data disimpan sebagai JSON di `.data/store.json` supaya panel admin bisa
- * dipakai tanpa Supabase. File ini hanya untuk pengembangan lokal dan tidak
- * aman untuk deployment multi-instance / serverless.
- */
-
-const STORE_VERSION = 1;
-const STORE_DIR = path.join(process.cwd(), ".data");
-const STORE_FILE = path.join(STORE_DIR, "store.json");
-
 export class StoreError extends Error {}
 
-function createSeedStore(): StoreData {
-  return structuredClone({
-    version: STORE_VERSION,
-    categories,
-    works,
-    profile: authorProfile,
-  });
-}
-
-function isStoreData(value: unknown): value is StoreData {
-  const store = value as StoreData;
-  return Boolean(
-    store &&
-      Array.isArray(store.categories) &&
-      Array.isArray(store.works) &&
-      store.profile &&
-      typeof store.profile.name === "string",
-  );
-}
-
-function isMissingFile(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException)?.code === "ENOENT";
-}
-
-async function persistStore(store: StoreData): Promise<void> {
-  await fs.mkdir(STORE_DIR, { recursive: true });
-  const temporaryFile = `${STORE_FILE}.${process.pid}.tmp`;
-  await fs.writeFile(
-    temporaryFile,
-    `${JSON.stringify(store, null, 2)}\n`,
-    "utf8",
-  );
-
-  try {
-    await fs.rename(temporaryFile, STORE_FILE);
-  } catch {
-    await fs.rm(STORE_FILE, { force: true });
-    await fs.rename(temporaryFile, STORE_FILE);
-  }
-}
-
-/* Antrean sederhana agar dua penulisan tidak saling menimpa. */
-let writeQueue: Promise<unknown> = Promise.resolve();
-
-function withStoreLock<T>(operation: () => Promise<T>): Promise<T> {
-  const result = writeQueue.then(operation, operation);
-  writeQueue = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return result;
-}
-
-let seedPromise: Promise<void> | null = null;
-
-function ensureStoreExists(): Promise<void> {
-  if (!seedPromise) {
-    seedPromise = (async () => {
-      try {
-        await fs.access(STORE_FILE);
-        return;
-      } catch {
-        // Belum ada — buat dari data awal.
-      }
-
-      await withStoreLock(async () => {
-        try {
-          await fs.access(STORE_FILE);
-          return;
-        } catch {
-          await persistStore(createSeedStore());
-        }
-      });
-    })().catch((error) => {
-      seedPromise = null;
-      throw error;
-    });
-  }
-
-  return seedPromise;
-}
-
-async function readStoreFile(): Promise<StoreData> {
-  const raw = await fs.readFile(STORE_FILE, "utf8");
-  const parsed: unknown = JSON.parse(raw);
-
-  if (!isStoreData(parsed)) {
-    throw new StoreError("Struktur data penyimpanan tidak dikenali.");
-  }
-
-  return parsed;
-}
-
-async function backupBrokenStore(): Promise<void> {
-  const backupFile = path.join(
-    STORE_DIR,
-    `store.rusak-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
-  );
-
-  try {
-    await fs.rename(STORE_FILE, backupFile);
-  } catch {
-    // Kalau gagal, biarkan; seed akan menimpa.
-  }
-}
-
-async function readStore(): Promise<StoreData> {
-  try {
-    await ensureStoreExists();
-    return await readStoreFile();
-  } catch (error) {
-    if (isMissingFile(error)) {
-      seedPromise = null;
-      await ensureStoreExists();
-      return readStoreFile();
+/**
+ * Helper untuk mendapatkan Supabase client:
+ * - Jika `useAdmin` = true atau ada SERVICE_ROLE_KEY, gunakan service role untuk mutasi / bypass RLS
+ * - Jika tidak, gunakan createServerSupabase() dengan anon key & cookie
+ */
+async function getSupabase(useAdmin = false) {
+  if (useAdmin) {
+    try {
+      return createServiceClient();
+    } catch {
+      // Fallback ke server client jika SERVICE_ROLE_KEY belum disetel
+      return await createServerSupabase();
     }
-
-    if (error instanceof SyntaxError || error instanceof StoreError) {
-      await backupBrokenStore();
-      seedPromise = null;
-      await ensureStoreExists();
-      return readStoreFile();
-    }
-
-    throw error;
   }
-}
-
-async function mutateStore<T>(
-  mutator: (store: StoreData) => T | Promise<T>,
-): Promise<T> {
-  await ensureStoreExists();
-
-  return withStoreLock(async () => {
-    const store = await readStoreFile();
-    const result = await mutator(store);
-    await persistStore(store);
-    return result;
-  });
-}
-
-/* -------------------------------------------------------------------------- */
-/* Pembacaan publik                                                            */
-/* -------------------------------------------------------------------------- */
-
-function sortByPublishedDesc(items: Work[]): Work[] {
-  return [...items].sort(
-    (a, b) =>
-      b.publishedAt.localeCompare(a.publishedAt) ||
-      a.title.localeCompare(b.title, "id"),
-  );
-}
-
-function categoryNameMap(store: StoreData): Map<string, string> {
-  return new Map(store.categories.map((category) => [category.slug, category.name]));
+  return await createServerSupabase();
 }
 
 export function toWorkSummary(work: Work, categoryName: string): WorkSummary {
@@ -203,25 +48,31 @@ export function toWorkSummary(work: Work, categoryName: string): WorkSummary {
   };
 }
 
-function publishedFromStore(store: StoreData): Work[] {
-  return sortByPublishedDesc(
-    store.works.filter((work) => work.status === "published"),
-  );
-}
-
-function summariesFromStore(store: StoreData): WorkSummary[] {
-  const names = categoryNameMap(store);
-  return publishedFromStore(store).map((work) =>
-    toWorkSummary(work, names.get(work.category) ?? work.category),
-  );
-}
+/* -------------------------------------------------------------------------- */
+/* Pembacaan Publik                                                           */
+/* -------------------------------------------------------------------------- */
 
 export async function getPublishedWorks(): Promise<Work[]> {
-  return publishedFromStore(await readStore());
+  const supabase = await getSupabase(false);
+  const { data, error } = await supabase
+    .from("works")
+    .select("*, work_files(*)")
+    .eq("status", "published")
+    .order("published_at", { ascending: false });
+
+  if (error) throw new StoreError(`Gagal mengambil karya: ${error.message}`);
+
+  return (data ?? []).map(mapWorkRow);
 }
 
 export async function getPublishedSummaries(): Promise<WorkSummary[]> {
-  return summariesFromStore(await readStore());
+  const [works, categories] = await Promise.all([
+    getPublishedWorks(),
+    getCategories(),
+  ]);
+
+  const catMap = new Map(categories.map((c) => [c.slug, c.name]));
+  return works.map((w) => toWorkSummary(w, catMap.get(w.category) ?? w.category));
 }
 
 export async function getFeaturedWork(): Promise<Work | undefined> {
@@ -230,21 +81,30 @@ export async function getFeaturedWork(): Promise<Work | undefined> {
 }
 
 export async function getCategories(): Promise<Category[]> {
-  return (await readStore()).categories;
+  const supabase = await getSupabase(false);
+  const { data, error } = await supabase
+    .from("categories")
+    .select("*")
+    .order("name", { ascending: true });
+
+  if (error) throw new StoreError(`Gagal mengambil kategori: ${error.message}`);
+  return data ?? [];
 }
 
 export async function getCategoriesWithCounts(): Promise<
   Array<Category & { count: number }>
 > {
-  const store = await readStore();
-  const counts = new Map<string, number>();
+  const [categories, publishedWorks] = await Promise.all([
+    getCategories(),
+    getPublishedWorks(),
+  ]);
 
-  for (const work of store.works) {
-    if (work.status !== "published") continue;
+  const counts = new Map<string, number>();
+  for (const work of publishedWorks) {
     counts.set(work.category, (counts.get(work.category) ?? 0) + 1);
   }
 
-  return store.categories.map((category) => ({
+  return categories.map((category) => ({
     ...category,
     count: counts.get(category.slug) ?? 0,
   }));
@@ -253,41 +113,101 @@ export async function getCategoriesWithCounts(): Promise<
 export async function getCategoryBySlug(
   slug: string,
 ): Promise<Category | undefined> {
-  const store = await readStore();
-  return store.categories.find((category) => category.slug === slug);
+  const supabase = await getSupabase(false);
+  const { data, error } = await supabase
+    .from("categories")
+    .select("*")
+    .eq("slug", slug)
+    .maybeSingle();
+
+  if (error) throw new StoreError(`Gagal mengambil kategori: ${error.message}`);
+  return data ?? undefined;
 }
 
 export async function getAuthorProfile(): Promise<AuthorProfile> {
-  return (await readStore()).profile;
+  const supabase = await getSupabase(false);
+  const { data, error } = await supabase
+    .from("author_profile")
+    .select("*")
+    .eq("id", 1)
+    .maybeSingle();
+
+  if (error) throw new StoreError(`Gagal mengambil profil: ${error.message}`);
+  if (!data) {
+    throw new StoreError("Profil penulis belum ada di database.");
+  }
+
+  return {
+    name: data.name,
+    initials: data.initials,
+    role: data.role,
+    location: data.location,
+    shortBio: data.short_bio,
+    bio: Array.isArray(data.bio) ? data.bio : [],
+    quote: data.quote,
+    experience: Array.isArray(data.experience) ? data.experience : [],
+    publications: Array.isArray(data.publications) ? data.publications : [],
+  };
 }
 
 export async function getWorkBySlug(slug: string): Promise<Work | undefined> {
-  const store = await readStore();
-  return store.works.find(
-    (work) => work.slug === slug && work.status === "published",
-  );
+  const supabase = await getSupabase(false);
+  const { data, error } = await supabase
+    .from("works")
+    .select("*, work_files(*)")
+    .eq("slug", slug)
+    .eq("status", "published")
+    .maybeSingle();
+
+  if (error) throw new StoreError(`Gagal mengambil karya: ${error.message}`);
+  return data ? mapWorkRow(data) : undefined;
 }
 
 export async function getWorkById(id: string): Promise<Work | undefined> {
-  const store = await readStore();
-  return store.works.find((work) => work.id === id);
+  const supabase = await getSupabase(true);
+  const { data, error } = await supabase
+    .from("works")
+    .select("*, work_files(*)")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) throw new StoreError(`Gagal mengambil karya: ${error.message}`);
+  return data ? mapWorkRow(data) : undefined;
 }
 
 export async function getWorkFileById(
   fileId: string,
 ): Promise<{ work: Work; file: WorkFile } | undefined> {
-  const store = await readStore();
+  const supabase = await getSupabase(true);
+  const { data, error } = await supabase
+    .from("work_files")
+    .select("*, works(*, work_files(*))")
+    .eq("id", fileId)
+    .maybeSingle();
 
-  for (const work of store.works) {
-    const file = work.files?.find((item) => item.id === fileId);
-    if (file) return { work, file };
-  }
+  if (error || !data || !data.works) return undefined;
 
-  return undefined;
+  const work = mapWorkRow(data.works);
+  const file: WorkFile = {
+    id: data.id,
+    name: data.name,
+    mime: data.mime,
+    size: Number(data.size),
+    extension: data.extension,
+  };
+
+  return { work, file };
 }
 
 export async function getAllWorks(): Promise<Work[]> {
-  return sortByPublishedDesc((await readStore()).works);
+  const supabase = await getSupabase(true);
+  const { data, error } = await supabase
+    .from("works")
+    .select("*, work_files(*)")
+    .order("published_at", { ascending: false });
+
+  if (error) throw new StoreError(`Gagal mengambil semua karya: ${error.message}`);
+  return (data ?? []).map(mapWorkRow);
 }
 
 export async function getWorkCounts(): Promise<{
@@ -296,16 +216,17 @@ export async function getWorkCounts(): Promise<{
   draft: number;
   categories: number;
 }> {
-  const store = await readStore();
-  const published = store.works.filter(
-    (work) => work.status === "published",
-  ).length;
+  const [works, categories] = await Promise.all([
+    getAllWorks(),
+    getCategories(),
+  ]);
 
+  const published = works.filter((work) => work.status === "published").length;
   return {
-    total: store.works.length,
+    total: works.length,
     published,
-    draft: store.works.length - published,
-    categories: store.categories.length,
+    draft: works.length - published,
+    categories: categories.length,
   };
 }
 
@@ -313,12 +234,10 @@ export async function getAdjacentWorks(slug: string): Promise<{
   newer?: WorkSummary;
   older?: WorkSummary;
 }> {
-  const store = await readStore();
-  const summaries = summariesFromStore(store);
+  const summaries = await getPublishedSummaries();
   const index = summaries.findIndex((work) => work.slug === slug);
 
   if (index === -1) return {};
-
   return {
     newer: index > 0 ? summaries[index - 1] : undefined,
     older: index < summaries.length - 1 ? summaries[index + 1] : undefined,
@@ -329,13 +248,13 @@ export async function getRelatedWorks(
   slug: string,
   limit = 3,
 ): Promise<WorkSummary[]> {
-  const store = await readStore();
-  const names = categoryNameMap(store);
-  const current = publishedFromStore(store).find((work) => work.slug === slug);
-
+  const published = await getPublishedWorks();
+  const current = published.find((work) => work.slug === slug);
   if (!current) return [];
 
-  const published = publishedFromStore(store);
+  const categories = await getCategories();
+  const catMap = new Map(categories.map((c) => [c.slug, c.name]));
+
   const sameCategory = published.filter(
     (work) => work.slug !== slug && work.category === current.category,
   );
@@ -345,155 +264,219 @@ export async function getRelatedWorks(
 
   return [...sameCategory, ...others]
     .slice(0, limit)
-    .map((work) => toWorkSummary(work, names.get(work.category) ?? work.category));
+    .map((work) => toWorkSummary(work, catMap.get(work.category) ?? work.category));
 }
 
 /* -------------------------------------------------------------------------- */
-/* Penulisan admin                                                             */
+/* Mutasi Admin (Supabase via Service Role / Client)                          */
 /* -------------------------------------------------------------------------- */
 
 export async function saveWork(input: WorkInput): Promise<Work> {
-  return mutateStore((store) => {
-    const title = input.title.trim();
-    const excerpt = input.excerpt.trim();
-    const content = input.content.trim();
-    const files = input.files ?? [];
-    const category = store.categories.find(
-      (item) => item.slug === input.category,
-    );
+  const supabase = await getSupabase(true);
+  const title = input.title.trim();
+  const excerpt = input.excerpt.trim();
+  const content = input.content.trim();
+  const files = input.files ?? [];
 
-    if (!title) throw new StoreError("Judul karya wajib diisi.");
-    if (!category) throw new StoreError("Kategori yang dipilih tidak ada.");
-    if (!excerpt) throw new StoreError("Ringkasan karya wajib diisi.");
-    if (!content && files.length === 0) {
-      throw new StoreError("Isi karya atau berkas karya wajib diisi.");
+  if (!title) throw new StoreError("Judul karya wajib diisi.");
+  if (!input.category) throw new StoreError("Kategori karya wajib diisi.");
+  if (!excerpt) throw new StoreError("Ringkasan karya wajib diisi.");
+  if (!content && files.length === 0) {
+    throw new StoreError("Isi karya atau berkas karya wajib diisi.");
+  }
+
+  // Dapatkan existing slugs untuk menjamin keunikan
+  const { data: allWorks } = await supabase
+    .from("works")
+    .select("id, slug");
+
+  const existingSlugs = (allWorks ?? [])
+    .filter((w) => w.id !== input.id)
+    .map((w) => w.slug);
+  const slug = uniqueSlug(input.slug?.trim() || title, existingSlugs);
+
+  // Jika featured = true, unfeatured karya lainnya
+  if (input.featured) {
+    await supabase.from("works").update({ featured: false }).neq("id", input.id || "");
+  }
+
+  const workId = input.id || `w-${randomUUID().slice(0, 8)}`;
+
+  const workPayload = {
+    id: workId,
+    title,
+    slug,
+    category: input.category,
+    excerpt,
+    content,
+    published_at: input.publishedAt,
+    status: input.status,
+    featured: input.featured,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error: upsertError } = await supabase
+    .from("works")
+    .upsert(workPayload);
+
+  if (upsertError) {
+    throw new StoreError(`Gagal menyimpan karya: ${upsertError.message}`);
+  }
+
+  // Simpan / update metadata files ke tabel work_files
+  if (files.length > 0) {
+    const fileRows = files.map((f) => ({
+      id: f.id,
+      work_id: workId,
+      name: f.name,
+      mime: f.mime,
+      size: f.size,
+      extension: f.extension,
+      storage_path: `${workId}/${f.id}.${f.extension}`,
+    }));
+
+    const { error: fileError } = await supabase
+      .from("work_files")
+      .upsert(fileRows);
+
+    if (fileError) {
+      throw new StoreError(`Gagal menyimpan data berkas: ${fileError.message}`);
     }
+  }
 
-    const existingSlugs = store.works
-      .filter((work) => work.id !== input.id)
-      .map((work) => work.slug);
-    const slug = uniqueSlug(input.slug?.trim() || title, existingSlugs);
-
-    if (input.featured) {
-      for (const work of store.works) {
-        if (work.id !== input.id) work.featured = false;
-      }
-    }
-
-    if (input.id) {
-      const existing = store.works.find((work) => work.id === input.id);
-      if (!existing) throw new StoreError("Karya tidak ditemukan.");
-
-      existing.title = title;
-      existing.slug = slug;
-      existing.category = category.slug;
-      existing.excerpt = excerpt;
-      existing.content = content;
-      existing.publishedAt = input.publishedAt;
-      existing.status = input.status;
-      existing.featured = input.featured;
-      existing.files = files;
-      existing.updatedAt = new Date().toISOString();
-
-      return existing;
-    }
-
-    const work: Work = {
-      id: `w-${randomUUID().slice(0, 8)}`,
-      title,
-      slug,
-      category: category.slug,
-      excerpt,
-      content,
-      publishedAt: input.publishedAt,
-      status: input.status,
-      featured: input.featured,
-      files,
-      updatedAt: new Date().toISOString(),
-    };
-
-    store.works.push(work);
-    return work;
-  });
+  const saved = await getWorkById(workId);
+  if (!saved) throw new StoreError("Karya gagal dimuat setelah disimpan.");
+  return saved;
 }
 
 export async function deleteWork(id: string): Promise<void> {
-  const removedFiles = await mutateStore((store) => {
-    const index = store.works.findIndex((work) => work.id === id);
-    if (index === -1) throw new StoreError("Karya tidak ditemukan.");
+  const supabase = await getSupabase(true);
+  const work = await getWorkById(id);
 
-    const [removed] = store.works.splice(index, 1);
-    return removed.files ?? [];
-  });
+  if (!work) throw new StoreError("Karya tidak ditemukan.");
 
-  await deleteUploads(removedFiles);
+  // Hapus berkas fisik dari storage jika ada
+  if (work.files && work.files.length > 0) {
+    await deleteUploads(work.files);
+  }
+
+  const { error } = await supabase.from("works").delete().eq("id", id);
+  if (error) throw new StoreError(`Gagal menghapus karya: ${error.message}`);
 }
 
 export async function setWorkStatus(
   id: string,
   status: WorkStatus,
 ): Promise<void> {
-  await mutateStore((store) => {
-    const work = store.works.find((item) => item.id === id);
-    if (!work) throw new StoreError("Karya tidak ditemukan.");
-    work.status = status;
-    work.updatedAt = new Date().toISOString();
-  });
+  const supabase = await getSupabase(true);
+  const { error } = await supabase
+    .from("works")
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq("id", id);
+
+  if (error) throw new StoreError(`Gagal mengubah status: ${error.message}`);
 }
 
 export async function createCategory(input: CategoryInput): Promise<Category> {
-  return mutateStore((store) => {
-    const name = input.name.trim();
+  const supabase = await getSupabase(true);
+  const name = input.name.trim();
 
-    if (!name) throw new StoreError("Nama kategori wajib diisi.");
+  if (!name) throw new StoreError("Nama kategori wajib diisi.");
 
-    const duplicate = store.categories.some(
-      (category) => category.name.toLowerCase() === name.toLowerCase(),
-    );
-    if (duplicate) {
-      throw new StoreError("Kategori dengan nama itu sudah ada.");
-    }
+  const categories = await getCategories();
+  const duplicate = categories.some(
+    (c) => c.name.toLowerCase() === name.toLowerCase(),
+  );
+  if (duplicate) throw new StoreError("Kategori dengan nama itu sudah ada.");
 
-    const slug = uniqueSlug(
-      input.slug?.trim() || name,
-      store.categories.map((category) => category.slug),
-      undefined,
-      "kategori",
-    );
+  const slug = uniqueSlug(
+    input.slug?.trim() || name,
+    categories.map((c) => c.slug),
+    undefined,
+    "kategori",
+  );
 
-    const category: Category = {
-      slug,
-      name,
-      description: input.description.trim(),
-    };
+  const newCat: Category = {
+    slug,
+    name,
+    description: input.description.trim(),
+  };
 
-    store.categories.push(category);
-    return category;
-  });
+  const { error } = await supabase.from("categories").insert(newCat);
+  if (error) throw new StoreError(`Gagal menambah kategori: ${error.message}`);
+
+  return newCat;
 }
 
 export async function deleteCategory(slug: string): Promise<void> {
-  await mutateStore((store) => {
-    const used = store.works.filter((work) => work.category === slug).length;
-    if (used > 0) {
-      throw new StoreError(
-        `Kategori ini masih dipakai oleh ${used} karya. Pindahkan karya terlebih dahulu.`,
-      );
-    }
+  const supabase = await getSupabase(true);
 
-    const index = store.categories.findIndex(
-      (category) => category.slug === slug,
+  // Pastikan tidak ada karya di kategori ini
+  const { data: usedWorks } = await supabase
+    .from("works")
+    .select("id")
+    .eq("category", slug);
+
+  if (usedWorks && usedWorks.length > 0) {
+    throw new StoreError(
+      `Kategori ini masih dipakai oleh ${usedWorks.length} karya. Pindahkan karya terlebih dahulu.`,
     );
-    if (index === -1) throw new StoreError("Kategori tidak ditemukan.");
+  }
 
-    store.categories.splice(index, 1);
-  });
+  const { error } = await supabase.from("categories").delete().eq("slug", slug);
+  if (error) throw new StoreError(`Gagal menghapus kategori: ${error.message}`);
 }
 
 export async function updateAuthorProfile(
   profile: AuthorProfile,
 ): Promise<void> {
-  await mutateStore((store) => {
-    store.profile = profile;
-  });
+  const supabase = await getSupabase(true);
+  const payload = {
+    id: 1,
+    name: profile.name,
+    initials: profile.initials,
+    role: profile.role,
+    location: profile.location,
+    short_bio: profile.shortBio,
+    bio: profile.bio,
+    quote: profile.quote,
+    experience: profile.experience,
+    publications: profile.publications,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase.from("author_profile").upsert(payload);
+  if (error) throw new StoreError(`Gagal menyimpan profil: ${error.message}`);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Helper Mapper Row DB -> TypeScript Model                                   */
+/* -------------------------------------------------------------------------- */
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapWorkRow(row: any): Work {
+  const filesList: WorkFile[] = Array.isArray(row.work_files)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ? row.work_files.map((f: any) => ({
+        id: f.id,
+        name: f.name,
+        mime: f.mime,
+        size: Number(f.size),
+        extension: f.extension,
+      }))
+    : [];
+
+  return {
+    id: row.id,
+    title: row.title,
+    slug: row.slug,
+    category: row.category,
+    excerpt: row.excerpt,
+    content: row.content ?? "",
+    publishedAt: row.published_at,
+    featured: Boolean(row.featured),
+    status: row.status as WorkStatus,
+    files: filesList,
+    updatedAt: row.updated_at,
+  };
 }
