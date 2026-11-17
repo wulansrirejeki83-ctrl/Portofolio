@@ -4,6 +4,8 @@ import { cn } from "@/lib/utils";
 interface AuthorPortraitProps {
   className?: string;
   caption?: string;
+  name?: string;
+  initials?: string;
 }
 
 /**
@@ -12,6 +14,8 @@ interface AuthorPortraitProps {
 export function AuthorPortrait({
   className,
   caption = "Potret penulis",
+  name = site.name,
+  initials = site.initials,
 }: AuthorPortraitProps) {
   return (
     <div className={cn("relative", className)}>
@@ -44,14 +48,14 @@ export function AuthorPortrait({
         <div className="relative flex h-full flex-col items-center justify-center px-6 text-center">
           <div className="flex h-28 w-28 items-center justify-center rounded-full border border-[#f6e8d5]/35">
             <span className="font-display text-5xl leading-none text-[#f6e8d5]">
-              {site.initials}
+              {initials}
             </span>
           </div>
           <p className="mt-7 text-[9px] uppercase tracking-[0.34em] text-[#f6e8d5]/60">
             {caption}
           </p>
           <p className="mt-2 font-display text-xl text-[#f6e8d5]/85">
-            {site.name}
+            {name}
           </p>
         </div>
 

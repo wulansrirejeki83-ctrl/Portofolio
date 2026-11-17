@@ -45,7 +45,7 @@ export default async function HomePage() {
             <div className="lg:col-span-7">
               <p className="flex flex-wrap items-center gap-3 text-[10px] uppercase tracking-[0.28em] text-mute">
                 <span aria-hidden="true" className="h-px w-8 bg-accent" />
-                {site.name} — {site.role}
+                {authorProfile.name} — {authorProfile.role}
               </p>
 
               <h1 className="mt-7 font-display text-[3.4rem] leading-[0.94] tracking-[-0.01em] sm:text-7xl lg:text-[5.4rem]">
@@ -274,7 +274,11 @@ export default async function HomePage() {
       <section className="mx-auto max-w-6xl px-5 pt-24 sm:px-8">
         <div className="grid items-center gap-12 lg:grid-cols-12 lg:gap-16">
           <div className="lg:col-span-5">
-            <AuthorPortrait className="mx-auto max-w-sm lg:max-w-none" />
+            <AuthorPortrait
+              className="mx-auto max-w-sm lg:max-w-none"
+              name={authorProfile.name}
+              initials={authorProfile.initials}
+            />
           </div>
           <div className="lg:col-span-7 lg:pl-4">
             <p className="text-[10px] uppercase tracking-[0.28em] text-mute">
@@ -325,7 +329,7 @@ export default async function HomePage() {
             “{authorProfile.quote}”
           </blockquote>
           <p className="mt-7 text-[9px] uppercase tracking-[0.3em] text-mute">
-            — {site.name}
+            — {authorProfile.name}
           </p>
           <Link
             href="/karya"

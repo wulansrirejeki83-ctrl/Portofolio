@@ -1,7 +1,15 @@
 import Link from "next/link";
 import { site } from "@/lib/site";
 
-export function SiteFooter() {
+interface SiteFooterProps {
+  name?: string;
+  location?: string;
+}
+
+export function SiteFooter({
+  name = site.name,
+  location = site.location,
+}: SiteFooterProps) {
   return (
     <footer className="mt-24 bg-ink text-paper">
       <div className="mx-auto max-w-6xl px-5 py-16 sm:px-8 sm:py-20">
@@ -11,7 +19,7 @@ export function SiteFooter() {
               Arsip Sastra Digital
             </p>
             <p className="mt-5 font-display text-4xl leading-none sm:text-5xl">
-              {site.name}
+              {name}
             </p>
             <p className="mt-5 max-w-sm font-serif text-sm leading-relaxed text-paper/55">
               {site.tagline} Tempat puisi, cerpen, esai, dan naskah drama
@@ -93,14 +101,14 @@ export function SiteFooter() {
               ))}
             </ul>
             <p className="mt-5 text-xs leading-relaxed text-paper/40">
-              {site.location} · Terbuka untuk undangan membaca bersama dan
+              {location} · Terbuka untuk undangan membaca bersama dan
               lokakarya menulis.
             </p>
           </div>
         </div>
 
         <div className="mt-14 flex flex-col gap-3 border-t border-paper/10 pt-6 text-[10px] uppercase tracking-[0.22em] text-paper/35 sm:flex-row sm:items-center sm:justify-between">
-          <p>© {new Date().getFullYear()} {site.name}. Seluruh karya dilindungi.</p>
+          <p>© {new Date().getFullYear()} {name}. Seluruh karya dilindungi.</p>
           <p>Dibuat dengan ketenangan &amp; kopi hangat.</p>
         </div>
       </div>

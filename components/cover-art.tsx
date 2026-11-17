@@ -9,6 +9,7 @@ interface CoverArtProps {
   seed: string;
   variant?: Variant;
   className?: string;
+  author?: string;
 }
 
 const palettes = [
@@ -49,6 +50,7 @@ export function CoverArt({
   seed,
   variant = "card",
   className,
+  author = site.name,
 }: CoverArtProps) {
   const baseTone = categoryTone[category] ?? 0;
   const palette =
@@ -131,7 +133,7 @@ export function CoverArt({
           className="text-center text-[8px] uppercase tracking-[0.34em]"
           style={{ color: palette.ink, opacity: 0.72 }}
         >
-          {site.name}
+          {author}
         </p>
       </div>
     </div>

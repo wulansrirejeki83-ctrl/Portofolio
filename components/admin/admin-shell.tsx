@@ -22,6 +22,8 @@ import { cn } from "@/lib/utils";
 
 interface AdminShellProps {
   email: string;
+  authorName?: string;
+  authorInitials?: string;
   children: ReactNode;
 }
 
@@ -47,14 +49,20 @@ function isActive(pathname: string, href: string, exact: boolean): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function Brand() {
+function Brand({
+  name = site.name,
+  initials = site.initials,
+}: {
+  name?: string;
+  initials?: string;
+}) {
   return (
     <Link href="/admin" className="group flex items-center gap-3">
       <span className="flex h-10 w-10 items-center justify-center border border-ink/25 font-display text-lg leading-none transition-colors group-hover:border-accent group-hover:text-accent">
-        {site.initials}
+        {initials}
       </span>
       <span className="flex flex-col">
-        <span className="font-display text-lg leading-none">{site.name}</span>
+        <span className="font-display text-lg leading-none">{name}</span>
         <span className="mt-1 text-[8px] uppercase tracking-[0.3em] text-mute">
           Panel Admin
         </span>
@@ -66,16 +74,20 @@ function Brand() {
 function SidebarContent({
   pathname,
   email,
+  authorName,
+  authorInitials,
   onNavigate,
 }: {
   pathname: string;
   email: string;
+  authorName?: string;
+  authorInitials?: string;
   onNavigate?: () => void;
 }) {
   return (
     <>
       <div className="border-b border-line px-5 py-5">
-        <Brand />
+        <Brand name={authorName} initials={authorInitials} />
       </div>
 
       <nav className="flex-1 px-3 py-5" aria-label="Navigasi panel admin">
@@ -140,10 +152,10 @@ function SidebarContent({
           <Database aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 text-gold" />
           <div>
             <p className="text-[9px] uppercase tracking-[0.18em] text-mute">
-              Penyimpanan lokal
+              Basis data Supabase
             </p>
             <p className="mt-1 font-serif text-[11px] leading-snug text-ink-soft">
-              Tersimpan di <code className="text-[10px]">.data/store.json</code>
+              Tersambung ke PostgreSQL
             </p>
           </div>
         </div>
@@ -166,14 +178,24 @@ function SidebarContent({
   );
 }
 
-export function AdminShell({ email, children }: AdminShellProps) {
+export function AdminShell({
+  email,
+  authorName = site.name,
+  authorInitials = site.initials,
+  children,
+}: AdminShellProps) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
 
   return (
     <div className="flex min-h-screen flex-1 bg-paper">
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 flex-col border-r border-line bg-paper-soft lg:flex">
-        <SidebarContent pathname={pathname} email={email} />
+        <SidebarContent
+          pathname={pathname}
+          email={email}
+          authorName={authorName}
+          authorInitials={authorInitials}
+        />
       </aside>
 
       {open ? (
@@ -196,6 +218,8 @@ export function AdminShell({ email, children }: AdminShellProps) {
             <SidebarContent
               pathname={pathname}
               email={email}
+              authorName={authorName}
+              authorInitials={authorInitials}
               onNavigate={() => setOpen(false)}
             />
           </aside>
@@ -214,7 +238,7 @@ export function AdminShell({ email, children }: AdminShellProps) {
             >
               <Menu aria-hidden="true" className="h-4 w-4" />
             </button>
-            <span className="font-display text-lg leading-none">{site.name}</span>
+            <span className="font-display text-lg leading-none">{authorName}</span>
           </div>
 
           <p className="hidden text-[10px] uppercase tracking-[0.24em] text-mute lg:block">

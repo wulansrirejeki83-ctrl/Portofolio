@@ -26,7 +26,11 @@ export default async function TentangPage() {
       <section className="mx-auto max-w-6xl px-5 pt-14 sm:px-8 sm:pt-20">
         <div className="grid items-start gap-12 lg:grid-cols-12 lg:gap-16">
           <div className="lg:col-span-5">
-            <AuthorPortrait className="mx-auto max-w-sm lg:max-w-none" />
+            <AuthorPortrait
+              className="mx-auto max-w-sm lg:max-w-none"
+              name={authorProfile.name}
+              initials={authorProfile.initials}
+            />
             <div className="mx-auto mt-8 max-w-sm border border-line bg-paper-soft/60 p-5 lg:max-w-none">
               <p className="text-[9px] uppercase tracking-[0.26em] text-mute">
                 Sekilas

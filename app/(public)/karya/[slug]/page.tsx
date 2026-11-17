@@ -8,6 +8,7 @@ import { formatDate, readingMinutes } from "@/lib/format";
 import { site } from "@/lib/site";
 import {
   getAdjacentWorks,
+  getAuthorProfile,
   getCategoryBySlug,
   getRelatedWorks,
   getWorkBySlug,
@@ -24,12 +25,16 @@ export async function generateMetadata({
   params,
 }: WorkPageProps): Promise<Metadata> {
   const { slug } = await params;
-  const work = await getWorkBySlug(slug);
+  const [work, profile] = await Promise.all([
+    getWorkBySlug(slug),
+    getAuthorProfile().catch(() => null),
+  ]);
 
   if (!work) {
     return { title: "Karya tidak ditemukan" };
   }
 
+  const authorName = profile?.name ?? site.name;
   const category = await getCategoryBySlug(work.category);
   const categoryName = category?.name ?? work.category;
   const url = `/karya/${work.slug}`;
@@ -44,9 +49,9 @@ export async function generateMetadata({
       description: work.excerpt,
       url,
       publishedTime: work.publishedAt,
-      authors: [site.name],
+      authors: [authorName],
       section: categoryName,
-      tags: [categoryName, "karya sastra", site.name],
+      tags: [categoryName, "karya sastra", authorName],
     },
     twitter: {
       card: "summary",
@@ -64,12 +69,14 @@ export default async function WorkDetailPage({ params }: WorkPageProps) {
     notFound();
   }
 
-  const [categoryRecord, adjacent, related] = await Promise.all([
+  const [categoryRecord, adjacent, related, profile] = await Promise.all([
     getCategoryBySlug(work.category),
     getAdjacentWorks(work.slug),
     getRelatedWorks(work.slug),
+    getAuthorProfile().catch(() => null),
   ]);
 
+  const authorName = profile?.name ?? site.name;
   const category = categoryRecord ?? {
     slug: work.category,
     name: work.category,
@@ -117,7 +124,7 @@ export default async function WorkDetailPage({ params }: WorkPageProps) {
             {work.excerpt}
           </p>
           <div className="mt-7 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-[9px] uppercase tracking-[0.2em] text-mute">
-            <span>{site.name}</span>
+            <span>{authorName}</span>
             <span aria-hidden="true" className="text-line-strong">
               ·
             </span>
@@ -134,6 +141,7 @@ export default async function WorkDetailPage({ params }: WorkPageProps) {
             title={work.title}
             category={category.name}
             seed={work.slug}
+            author={authorName}
             variant="wide"
             className="aspect-[16/11] w-full sm:aspect-[21/9]"
           />

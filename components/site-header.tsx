@@ -11,7 +11,15 @@ function isActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-export function SiteHeader() {
+interface SiteHeaderProps {
+  name?: string;
+  initials?: string;
+}
+
+export function SiteHeader({
+  name = site.name,
+  initials = site.initials,
+}: SiteHeaderProps) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
 
@@ -21,14 +29,14 @@ export function SiteHeader() {
         <Link
           href="/"
           className="group flex items-center gap-3"
-          aria-label={`${site.name} — Beranda`}
+          aria-label={`${name} — Beranda`}
         >
           <span className="flex h-11 w-11 items-center justify-center border border-ink/25 font-display text-xl leading-none transition-colors duration-300 group-hover:border-accent group-hover:text-accent">
-            {site.initials}
+            {initials}
           </span>
           <span className="flex flex-col">
             <span className="font-display text-xl leading-none tracking-wide">
-              {site.name}
+              {name}
             </span>
             <span className="mt-1.5 text-[9px] uppercase tracking-[0.32em] text-mute">
               Arsip Sastra

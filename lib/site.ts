@@ -3,19 +3,19 @@
  * Ganti nilai di bawah ini dengan data penulis yang sebenarnya.
  */
 export const site = {
-  name: "user123",
-  initials: "U",
-  role: "Guru Bahasa Indonesia",
+  name: "Wulan Sri Rejeki",
+  initials: "W",
+  role: "Guru Bahasa Indonesia · Penulis",
   tagline: "Rumah bagi kata-kata yang tinggal.",
   description:
     "Arsip digital puisi, cerpen, esai, dan naskah drama seorang guru Bahasa Indonesia. Sebuah ruang tenang untuk membaca, merenung, dan pulang pada kata-kata.",
-  location: "Yogyakarta, Indonesia",
-  url: "https://example.com",
+  location: "Cimahi, Indonesia",
+  url: "https://wulansrirejeki.vercel.app",
   email: "halo@example.com",
   socials: [
-    { label: "Instagram", handle: "@user123", href: "https://instagram.com" },
-    { label: "Facebook", handle: "user123", href: "https://facebook.com" },
-    { label: "LinkedIn", handle: "user123", href: "https://linkedin.com" },
+    { label: "Instagram", handle: "@wulansrirejeki", href: "https://instagram.com" },
+    { label: "Facebook", handle: "wulansrirejeki", href: "https://facebook.com" },
+    { label: "LinkedIn", handle: "wulansrirejeki", href: "https://linkedin.com" },
   ],
   nav: [
     { href: "/", label: "Beranda" },

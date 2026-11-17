@@ -1,11 +1,19 @@
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
+import { getAuthorProfile } from "@/lib/store";
 
-export default function PublicLayout({
+export default async function PublicLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  let profile = null;
+  try {
+    profile = await getAuthorProfile();
+  } catch {
+    // Abaikan jika database belum siap/koneksi gagal, fallback ke site defaults
+  }
+
   return (
     <>
       <a
@@ -14,11 +22,11 @@ export default function PublicLayout({
       >
         Lewati ke konten
       </a>
-      <SiteHeader />
+      <SiteHeader name={profile?.name} initials={profile?.initials} />
       <main id="konten" className="flex-1">
         {children}
       </main>
-      <SiteFooter />
+      <SiteFooter name={profile?.name} location={profile?.location} />
     </>
   );
 }
